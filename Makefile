@@ -1,4 +1,4 @@
-.PHONY: build run test lint telemetry venv train
+.PHONY: build run test lint telemetry venv train bench-adaptive
 
 build:
 	go build -o bin/resolver ./cmd/resolver
@@ -29,3 +29,8 @@ venv:
 # Requires `make telemetry` first (for ml/data/labeled.csv) and `make venv`.
 train:
 	.venv/bin/python ml/train.py
+
+# Four-way comparison (no-cache / LRU / adaptive) on the recency-hostile revival
+# workload. Regenerates telemetry, retrains, and benchmarks. Requires `make venv`.
+bench-adaptive:
+	./scripts/bench_adaptive.sh

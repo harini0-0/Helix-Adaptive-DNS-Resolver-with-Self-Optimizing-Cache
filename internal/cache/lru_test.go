@@ -129,15 +129,15 @@ func TestAdaptiveEvictionDropsLowestScoreNotLRU(t *testing.T) {
 		case "a":
 			return 10, true
 		case "b":
-			return 1, true
+			return 1, true // lowest-scoring resident
 		default:
-			return 0, true
+			return 5, true // "c" is admissible (scores above "b")
 		}
 	}, 2)
 
 	c.Put("a", []byte("1"), time.Minute)
 	c.Put("b", []byte("2"), time.Minute)
-	c.Put("c", []byte("3"), time.Minute) // full: sample {b,a}, evict lowest = "b"
+	c.Put("c", []byte("3"), time.Minute) // full: among {c,b,a}, evict lowest = "b"
 
 	if _, _, ok := c.Get("b"); ok {
 		t.Fatal("expected adaptive eviction to drop low-scoring \"b\"")
@@ -147,6 +147,32 @@ func TestAdaptiveEvictionDropsLowestScoreNotLRU(t *testing.T) {
 	}
 	if _, _, ok := c.Get("c"); !ok {
 		t.Fatal("expected freshly inserted \"c\" to be present")
+	}
+}
+
+func TestAdaptiveEvictionAdmissionRejectsLowValueNewcomer(t *testing.T) {
+	c := New(2)
+	// Residents "a","b" score high; newcomer "z" scores low. Admission control
+	// should evict "z" on arrival rather than displace a high-value resident.
+	c.SetAdaptiveEviction(func(key string) (float64, bool) {
+		if key == "z" {
+			return 0, true
+		}
+		return 10, true
+	}, 4)
+
+	c.Put("a", []byte("1"), time.Minute)
+	c.Put("b", []byte("2"), time.Minute)
+	c.Put("z", []byte("9"), time.Minute) // low value: should not be admitted
+
+	if _, _, ok := c.Get("z"); ok {
+		t.Fatal("expected low-value newcomer \"z\" to be rejected by admission")
+	}
+	if _, _, ok := c.Get("a"); !ok {
+		t.Fatal("expected high-value resident \"a\" to survive")
+	}
+	if _, _, ok := c.Get("b"); !ok {
+		t.Fatal("expected high-value resident \"b\" to survive")
 	}
 }
 

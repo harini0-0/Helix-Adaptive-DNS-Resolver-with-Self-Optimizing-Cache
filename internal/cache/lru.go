@@ -97,7 +97,14 @@ func (c *Cache) SetAdaptiveEviction(scorer func(key string) (float64, bool), sam
 }
 
 // evict removes one entry. Callers must hold c.mu. With adaptive eviction it
-// scores the LRU-tail sample and drops the lowest; otherwise it drops the tail.
+// scores the LRU-tail sample PLUS the just-inserted front entry and drops the
+// lowest; otherwise it drops the strict LRU tail.
+//
+// Including the front entry is an admission control: a freshly inserted low-value
+// key (e.g. one-off noise) is evicted immediately instead of displacing a
+// higher-value resident. This is the TinyLFU idea — without it, every insertion
+// forces out a tail entry even when the newcomer is worth less than everything
+// already cached.
 func (c *Cache) evict() {
 	if c.scorer == nil || c.sampleSize <= 1 {
 		c.removeElement(c.ll.Back())
@@ -106,11 +113,23 @@ func (c *Cache) evict() {
 	var worst *list.Element
 	worstScore := math.Inf(1)
 	found := false
-	for el, i := c.ll.Back(), 0; el != nil && i < c.sampleSize; el, i = el.Prev(), i+1 {
+	consider := func(el *list.Element) {
+		if el == nil {
+			return
+		}
 		key := el.Value.(*entry).key
 		if s, ok := c.scorer(key); ok && (!found || s < worstScore) {
 			worstScore, worst, found = s, el, true
 		}
+	}
+
+	front := c.ll.Front() // the entry just inserted by Put
+	consider(front)
+	for el, i := c.ll.Back(), 0; el != nil && i < c.sampleSize; el, i = el.Prev(), i+1 {
+		if el == front {
+			continue
+		}
+		consider(el)
 	}
 	if !found {
 		c.removeElement(c.ll.Back()) // no scores available -> strict LRU

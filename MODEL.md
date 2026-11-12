@@ -52,18 +52,38 @@ XGBoost's internal format.
   asserts the Go walker reproduces them — verified to within `1.7e-6`. This is
   the guarantee that in-process Go inference equals the trained model.
 
-## Adaptive eviction (`internal/cache`)
+## Adaptive eviction + admission (`internal/cache`)
 
 When the cache is full, instead of always dropping the LRU tail, it:
 
-1. samples the `-evict-sample` (default 8) least-recently-used entries,
-2. scores each with the model (probability it recurs soon),
+1. samples the `-evict-sample` (default 8) least-recently-used entries **plus the
+   just-inserted entry**,
+2. scores each with the model (predicted retention),
 3. evicts the lowest-scoring one.
 
-If the scorer has no data for any sampled key, it falls back to strict LRU. This
-is the same bounded, sampled approach Redis uses for approximate LRU/LFU — O(k)
-per eviction, never O(n) — and it keeps a model failure from ever degrading
-correctness.
+Including the just-inserted entry is **admission control** (the TinyLFU idea): a
+one-off, low-value key is evicted on arrival rather than displacing a popular
+resident. This turned out to be the mechanism that actually makes the adaptive
+cache beat LRU — see below. If the scorer has no data for any candidate it falls
+back to strict LRU. The scan is bounded (O(k) per eviction, never O(n)), the same
+sampled approach Redis uses for approximate LRU/LFU, and a model failure can
+never degrade correctness.
+
+## Does it beat LRU? Measured both ways (`make bench-adaptive`)
+
+- **Recency-friendly workload (hot set + tail):** adaptive **ties** LRU. Recency
+  already predicts reuse, so the model adds nothing — and it is honest to say so.
+- **Recency-hostile workload (`-workload revival`):** recurring keys returning
+  only after more distinct keys than the cache holds. Plain LRU gets **0% hits**
+  (it evicts every recurring key before it returns); the adaptive cache gets
+  **~44%**, ~1.76× throughput and ~2× lower median latency. Full table and
+  methodology in [BENCHMARKS.md](BENCHMARKS.md).
+
+The honest caveat: on the revival workload most of the win comes from
+frequency-aware **admission** (rejecting noise), not from XGBoost specifically. A
+plain LFU admission policy would likely capture much of the same gain; isolating
+the model's marginal value over a frequency baseline is the next experiment and
+is not yet done.
 
 ## Running it
 

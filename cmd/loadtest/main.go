@@ -31,6 +31,9 @@ func main() {
 	phot := flag.Float64("phot", 0.9, "probability a query targets the hot set")
 	timeout := flag.Duration("timeout", 2*time.Second, "per-query response timeout")
 	metricsURL := flag.String("metrics-url", "", "resolver /metrics URL for hit-ratio (optional)")
+	workload := flag.String("workload", "zipf", "workload: zipf (hot set + unique tail) or revival (round-robin recurring + noise)")
+	recurring := flag.Int("recurring", 200, "revival: size of the recurring key set")
+	noise := flag.Float64("noise", 0.5, "revival: probability a query is unique noise")
 	flag.Parse()
 
 	hotNames := make([]string, *hot)
@@ -38,15 +41,40 @@ func main() {
 		hotNames[i] = fmt.Sprintf("hot%d.example.com", i)
 	}
 
+	var uniqueCounter uint64 // distinct noise/tail keys generated
+	var recCounter uint64    // round-robin cursor over the recurring set
+
+	// pickName selects the target domain for one query. In "revival", recurring
+	// keys are requested ONE AT A TIME in round-robin order (no bursts), so the
+	// only way to serve one from cache is to have kept it alive across the many
+	// unique noise keys seen since its last access. A key accessed every
+	// `recurring` requests but evicted by noise in between is the case recency
+	// handles badly (it looks stale) and frequency handles well (it is popular).
+	pickName := func(rng *rand.Rand, elapsed time.Duration) string {
+		if *workload == "revival" {
+			if rng.Float64() < *noise {
+				n := atomic.AddUint64(&uniqueCounter, 1)
+				return "noise" + strconv.FormatUint(n, 10) + ".example.com"
+			}
+			idx := int(atomic.AddUint64(&recCounter, 1) % uint64(*recurring))
+			return "rec" + strconv.Itoa(idx) + ".example.com"
+		}
+		// default "zipf": hot set + unique tail
+		if rng.Float64() < *phot {
+			return hotNames[rng.Intn(len(hotNames))]
+		}
+		n := atomic.AddUint64(&uniqueCounter, 1)
+		return "u" + strconv.FormatUint(n, 10) + ".example.com"
+	}
+
 	hitsBefore, missesBefore := scrapeCacheCounters(*metricsURL)
 
 	var (
-		uniqueCounter uint64
-		totalOK       uint64
-		totalErr      uint64
-		wg            sync.WaitGroup
-		mu            sync.Mutex
-		latencies     []time.Duration
+		totalOK   uint64
+		totalErr  uint64
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		latencies []time.Duration
 	)
 
 	deadline := time.Now().Add(*duration)
@@ -66,13 +94,7 @@ func main() {
 			local := make([]time.Duration, 0, 4096)
 			readBuf := make([]byte, 512)
 			for time.Now().Before(deadline) {
-				var name string
-				if rng.Float64() < *phot {
-					name = hotNames[rng.Intn(len(hotNames))]
-				} else {
-					n := atomic.AddUint64(&uniqueCounter, 1)
-					name = "u" + strconv.FormatUint(n, 10) + ".example.com"
-				}
+				name := pickName(rng, time.Since(start))
 				query := buildQuery(uint16(rng.Intn(65536)), name)
 
 				t0 := time.Now()

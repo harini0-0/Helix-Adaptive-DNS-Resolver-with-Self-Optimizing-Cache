@@ -4,21 +4,28 @@ A concurrent DNS resolver in Go with a TTL-aware LRU cache, Prometheus metrics,
 and (later) an ML-driven adaptive eviction layer.
 
 ## Status
-Stages 1–7 complete: concurrent UDP resolver, hand-rolled TTL-aware LRU cache
+Stages 1–8a complete: concurrent UDP resolver, hand-rolled TTL-aware LRU cache
 (race-detector clean under concurrent load), bounded worker pool, in-process
 Prometheus metrics, a reproducible cache-on vs cache-off benchmark, a one-command
 Dockerized Prometheus + Grafana stack, a telemetry pipeline that logs engineered
-features per query, and an XGBoost retention model served in-process in Go for
-sampled adaptive eviction (deterministic LRU fallback).
+features per query, an XGBoost retention model served in-process in Go for
+sampled adaptive eviction + admission (deterministic LRU fallback), and a
+three-way benchmark showing where the model beats LRU.
 
-See [BENCHMARKS.md](BENCHMARKS.md) for measured cache results (~9.8× throughput,
-~53× lower median latency at a 90% hit ratio against a controlled 20 ms
-upstream), [TELEMETRY.md](TELEMETRY.md) for the feature/label pipeline, and
-[MODEL.md](MODEL.md) for training, Go inference parity, and the adaptive
-eviction policy.
+Key measured results:
+- Caching vs none: **~9.8× throughput, ~53× lower median latency** at a 90% hit
+  ratio (controlled 20 ms upstream).
+- Adaptive vs LRU on a recency-hostile workload: LRU **0% hits**, adaptive
+  **~44%**, **~1.76× throughput, ~2× lower median latency**. On recency-friendly
+  traffic the model ties LRU — stated honestly.
 
-Still to build: predictive prefetching and the four-way benchmark
-(no-cache / LRU / adaptive / adaptive+prefetch) — Stage 8.
+See [BENCHMARKS.md](BENCHMARKS.md) for both benchmarks and their limits,
+[TELEMETRY.md](TELEMETRY.md) for the feature/label pipeline, and
+[MODEL.md](MODEL.md) for training, Go inference parity, and the eviction/admission
+policy.
+
+Still to build (Stage 8b): predictive prefetching (the 4th config), and an
+LFU baseline to isolate the model's value over plain frequency.
 
 ## Observability stack
 
