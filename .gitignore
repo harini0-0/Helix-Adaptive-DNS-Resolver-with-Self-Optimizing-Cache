@@ -4,3 +4,7 @@
 
 # Generated telemetry / training data (regenerate with `make telemetry`)
 /ml/data/
+
+# Python virtualenv
+/.venv/
+__pycache__/

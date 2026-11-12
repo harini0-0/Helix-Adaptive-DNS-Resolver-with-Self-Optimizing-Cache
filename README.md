@@ -4,18 +4,21 @@ A concurrent DNS resolver in Go with a TTL-aware LRU cache, Prometheus metrics,
 and (later) an ML-driven adaptive eviction layer.
 
 ## Status
-Stages 1–6 complete: concurrent UDP resolver, hand-rolled TTL-aware LRU cache
+Stages 1–7 complete: concurrent UDP resolver, hand-rolled TTL-aware LRU cache
 (race-detector clean under concurrent load), bounded worker pool, in-process
 Prometheus metrics, a reproducible cache-on vs cache-off benchmark, a one-command
-Dockerized Prometheus + Grafana stack, and a telemetry pipeline that logs
-engineered features per query and derives a training-ready, labeled dataset.
+Dockerized Prometheus + Grafana stack, a telemetry pipeline that logs engineered
+features per query, and an XGBoost retention model served in-process in Go for
+sampled adaptive eviction (deterministic LRU fallback).
 
-See [BENCHMARKS.md](BENCHMARKS.md) for measured results (~9.8× throughput, ~53×
-lower median latency at a 90% hit ratio against a controlled 20 ms upstream) and
-[TELEMETRY.md](TELEMETRY.md) for the feature/label pipeline.
+See [BENCHMARKS.md](BENCHMARKS.md) for measured cache results (~9.8× throughput,
+~53× lower median latency at a 90% hit ratio against a controlled 20 ms
+upstream), [TELEMETRY.md](TELEMETRY.md) for the feature/label pipeline, and
+[MODEL.md](MODEL.md) for training, Go inference parity, and the adaptive
+eviction policy.
 
-Still to build: the XGBoost adaptive-eviction / prefetch layer and its 4-way
-benchmark (Stages 7–8).
+Still to build: predictive prefetching and the four-way benchmark
+(no-cache / LRU / adaptive / adaptive+prefetch) — Stage 8.
 
 ## Observability stack
 

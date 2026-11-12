@@ -124,9 +124,55 @@ func (t *Tracker) Observe(key string, now time.Time) Features {
 	return f
 }
 
+// Peek returns the feature snapshot for key as of now WITHOUT recording an
+// access. It is used by the adaptive cache to score eviction candidates. ok is
+// false if the key has never been seen.
+func (t *Tracker) Peek(key string, now time.Time) (Features, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, ok := t.stats[key]
+	if !ok {
+		return Features{}, false
+	}
+	dt := now.Sub(s.lastSeen).Seconds()
+	if dt < 0 {
+		dt = 0
+	}
+	age := now.Sub(s.firstSeen).Seconds()
+	freq := 0.0
+	if age > 0 {
+		freq = s.count / (age / 60.0)
+	}
+	return Features{
+		TimeSinceLastAccess: dt,
+		AccessCount:         s.count,
+		AgeSeconds:          age,
+		FreqPerMin:          freq,
+		EWMAIntervalSeconds: s.ewma,
+		BurstScore:          s.burst * math.Exp(-dt/t.burstTau),
+		Hour:                now.Hour(),
+		DayOfWeek:           int(now.Weekday()),
+	}, true
+}
+
 // Len reports the number of distinct keys currently tracked.
 func (t *Tracker) Len() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.stats)
+}
+
+// Vector lays out the features in the fixed order the predictor expects. It MUST
+// match predictor.FeatureOrder and the FEATURES list in ml/train.py.
+func (f Features) Vector() []float64 {
+	return []float64{
+		f.TimeSinceLastAccess,
+		f.AccessCount,
+		f.AgeSeconds,
+		f.FreqPerMin,
+		f.EWMAIntervalSeconds,
+		f.BurstScore,
+		float64(f.Hour),
+		float64(f.DayOfWeek),
+	}
 }

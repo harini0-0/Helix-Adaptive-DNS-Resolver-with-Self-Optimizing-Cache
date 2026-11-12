@@ -3,6 +3,7 @@ package cache
 
 import (
 	"container/list"
+	"math"
 	"sync"
 	"time"
 )
@@ -20,6 +21,14 @@ type Cache struct {
 	capacity int
 	ll       *list.List // front = most recently used, back = least
 	items    map[string]*list.Element
+
+	// Optional adaptive eviction. When scorer is set, eviction samples the
+	// sampleSize least-recently-used entries and drops the one with the lowest
+	// predicted retention score instead of the strict LRU tail. If scorer
+	// returns ok=false for every sampled key, it falls back to strict LRU, so
+	// correctness never depends on the model.
+	scorer     func(key string) (score float64, ok bool)
+	sampleSize int
 }
 
 // New creates a Cache holding at most capacity entries.
@@ -73,8 +82,41 @@ func (c *Cache) Put(key string, value []byte, ttl time.Duration) {
 	c.items[key] = el
 
 	if c.ll.Len() > c.capacity {
-		c.removeElement(c.ll.Back())
+		c.evict()
 	}
+}
+
+// SetAdaptiveEviction enables model-driven eviction: when the cache is full it
+// samples the sampleSize least-recently-used entries and evicts the one scorer
+// ranks lowest (least likely to be requested again). A nil scorer or
+// sampleSize <= 1 keeps strict LRU. Configure this once at startup, before
+// serving; it is not meant to change concurrently with use.
+func (c *Cache) SetAdaptiveEviction(scorer func(key string) (float64, bool), sampleSize int) {
+	c.scorer = scorer
+	c.sampleSize = sampleSize
+}
+
+// evict removes one entry. Callers must hold c.mu. With adaptive eviction it
+// scores the LRU-tail sample and drops the lowest; otherwise it drops the tail.
+func (c *Cache) evict() {
+	if c.scorer == nil || c.sampleSize <= 1 {
+		c.removeElement(c.ll.Back())
+		return
+	}
+	var worst *list.Element
+	worstScore := math.Inf(1)
+	found := false
+	for el, i := c.ll.Back(), 0; el != nil && i < c.sampleSize; el, i = el.Prev(), i+1 {
+		key := el.Value.(*entry).key
+		if s, ok := c.scorer(key); ok && (!found || s < worstScore) {
+			worstScore, worst, found = s, el, true
+		}
+	}
+	if !found {
+		c.removeElement(c.ll.Back()) // no scores available -> strict LRU
+		return
+	}
+	c.removeElement(worst)
 }
 
 // removeElement unlinks el from both the list and the map. Callers must hold c.mu.

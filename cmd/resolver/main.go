@@ -14,6 +14,7 @@ import (
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/cache"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/dns"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/metrics"
+	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/predictor"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/telemetry"
 )
 
@@ -29,6 +30,8 @@ func main() {
 	healthCheck := flag.Bool("health-check", false, "probe the local /metrics endpoint, exit 0/1 (for container HEALTHCHECK)")
 	telemetryFile := flag.String("telemetry-file", "", "if set, write per-query feature rows (CSV) here for ML training")
 	burstWindow := flag.Duration("burst-window", 10*time.Second, "timescale of the burst-score feature")
+	modelFile := flag.String("model-file", "", "if set, enable model-driven adaptive eviction (requires -telemetry-file)")
+	evictSample := flag.Int("evict-sample", 8, "LRU-tail candidates to score per adaptive eviction")
 	flag.Parse()
 
 	// The final image is FROM scratch and has no curl/wget/shell, so the
@@ -68,13 +71,35 @@ func main() {
 		}()
 	}
 
+	c := cache.New(*cacheSize)
+
+	// Adaptive eviction needs live per-key features, which come from the
+	// telemetry tracker, so the model requires telemetry to be enabled.
+	if *modelFile != "" {
+		if rec == nil {
+			log.Fatal("-model-file requires -telemetry-file (the tracker supplies features)")
+		}
+		model, err := predictor.Load(*modelFile)
+		if err != nil {
+			log.Fatalf("model: %v", err)
+		}
+		c.SetAdaptiveEviction(func(key string) (float64, bool) {
+			f, ok := rec.Features(key, time.Now())
+			if !ok {
+				return 0, false
+			}
+			return model.Score(f.Vector()), true
+		}, *evictSample)
+		log.Printf("adaptive eviction enabled from %s (sample=%d)", *modelFile, *evictSample)
+	}
+
 	srv := &dns.Server{
 		Addr:      *listen,
 		Upstream:  *upstream,
 		Timeout:   *timeout,
 		Workers:   *workers,
 		QueueSize: *queue,
-		Cache:     cache.New(*cacheSize),
+		Cache:     c,
 		NoCache:   *noCache,
 		Telemetry: rec,
 	}

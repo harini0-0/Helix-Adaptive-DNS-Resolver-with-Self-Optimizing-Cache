@@ -128,6 +128,12 @@ func (r *Recorder) Dropped() uint64 { return r.dropped.Load() }
 // TrackedKeys reports the number of distinct keys with feature state.
 func (r *Recorder) TrackedKeys() int { return r.tracker.Len() }
 
+// Features returns the current feature snapshot for key without recording an
+// access, for scoring eviction candidates. ok is false if the key is unknown.
+func (r *Recorder) Features(key string, now time.Time) (Features, bool) {
+	return r.tracker.Peek(key, now)
+}
+
 // Close stops the writer, flushes remaining rows, and closes the file. Safe to
 // call more than once.
 func (r *Recorder) Close() error {

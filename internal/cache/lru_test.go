@@ -120,6 +120,53 @@ func TestConcurrentAccessIsRaceFree(t *testing.T) {
 	}
 }
 
+func TestAdaptiveEvictionDropsLowestScoreNotLRU(t *testing.T) {
+	c := New(2)
+	// Score "a" high (keep) and "b" low (drop). Strict LRU would evict "a"
+	// (the tail); adaptive eviction should instead evict "b".
+	c.SetAdaptiveEviction(func(key string) (float64, bool) {
+		switch key {
+		case "a":
+			return 10, true
+		case "b":
+			return 1, true
+		default:
+			return 0, true
+		}
+	}, 2)
+
+	c.Put("a", []byte("1"), time.Minute)
+	c.Put("b", []byte("2"), time.Minute)
+	c.Put("c", []byte("3"), time.Minute) // full: sample {b,a}, evict lowest = "b"
+
+	if _, _, ok := c.Get("b"); ok {
+		t.Fatal("expected adaptive eviction to drop low-scoring \"b\"")
+	}
+	if _, _, ok := c.Get("a"); !ok {
+		t.Fatal("expected high-scoring \"a\" to survive despite being LRU tail")
+	}
+	if _, _, ok := c.Get("c"); !ok {
+		t.Fatal("expected freshly inserted \"c\" to be present")
+	}
+}
+
+func TestAdaptiveEvictionFallsBackToLRUWhenUnscorable(t *testing.T) {
+	c := New(2)
+	// scorer never has data -> must fall back to strict LRU (evict the tail).
+	c.SetAdaptiveEviction(func(string) (float64, bool) { return 0, false }, 4)
+
+	c.Put("a", []byte("1"), time.Minute)
+	c.Put("b", []byte("2"), time.Minute)
+	c.Put("c", []byte("3"), time.Minute) // strict LRU: "a" (tail) evicted
+
+	if _, _, ok := c.Get("a"); ok {
+		t.Fatal("expected strict-LRU fallback to evict tail \"a\"")
+	}
+	if _, _, ok := c.Get("b"); !ok {
+		t.Fatal("expected \"b\" to survive under LRU fallback")
+	}
+}
+
 func TestPutUpdatesExistingKey(t *testing.T) {
 	c := New(2)
 	c.Put("a", []byte("1"), time.Minute)
