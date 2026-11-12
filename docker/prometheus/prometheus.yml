@@ -1,0 +1,10 @@
+# Prometheus scrape config. Pull model: Prometheus reaches out to the
+# resolver's /metrics endpoint on an interval — the resolver never pushes.
+global:
+  scrape_interval: 2s      # short, so the Grafana dashboard feels live
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: resolver
+    static_configs:
+      - targets: ['resolver:9153']   # service name on the compose network

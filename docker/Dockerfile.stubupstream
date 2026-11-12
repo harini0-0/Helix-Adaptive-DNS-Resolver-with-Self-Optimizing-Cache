@@ -1,0 +1,16 @@
+# Controlled upstream for a self-contained, reproducible stack (same build
+# strategy as the resolver). It answers every query after a fixed simulated
+# RTT, so the dashboard and benchmarks don't depend on the public internet.
+
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/stubupstream ./cmd/stubupstream
+
+FROM scratch
+COPY --from=build /out/stubupstream /stubupstream
+EXPOSE 8054/udp
+ENTRYPOINT ["/stubupstream"]

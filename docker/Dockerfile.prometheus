@@ -1,0 +1,5 @@
+# Prometheus with the scrape config baked in, so the stack is self-contained and
+# does not depend on host bind-mounts / file-sharing permissions.
+# Build context is ./docker.
+FROM prom/prometheus:v2.53.2
+COPY prometheus/prometheus.yml /etc/prometheus/prometheus.yml

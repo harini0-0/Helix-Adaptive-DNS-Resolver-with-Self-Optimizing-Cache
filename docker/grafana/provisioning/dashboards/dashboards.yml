@@ -1,0 +1,12 @@
+# Tells Grafana to load any dashboard JSON found in the mounted folder, so the
+# resolver dashboard is present on first boot (infra as committed config).
+apiVersion: 1
+
+providers:
+  - name: resolver-dashboards
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

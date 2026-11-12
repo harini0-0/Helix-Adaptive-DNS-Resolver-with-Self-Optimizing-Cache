@@ -1,0 +1,22 @@
+# Multi-stage build: compile a fully static binary, then ship it FROM scratch.
+# The final image is only the binary (a few MB) — no shell, no package manager,
+# minimal attack surface, fast to pull.
+
+# --- build stage ---------------------------------------------------------
+FROM golang:1.26 AS build
+WORKDIR /src
+
+# Cache module downloads separately from source for faster rebuilds.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# CGO_ENABLED=0 produces a static binary so it can run FROM scratch.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/resolver ./cmd/resolver
+
+# --- final stage ---------------------------------------------------------
+FROM scratch
+COPY --from=build /out/resolver /resolver
+EXPOSE 8053/udp 9153/tcp
+ENTRYPOINT ["/resolver"]

@@ -1,0 +1,8 @@
+.git
+bin/
+resolver
+*.exe
+.DS_Store
+docker/
+docs/
+*.md

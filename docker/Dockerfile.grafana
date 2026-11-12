@@ -1,0 +1,5 @@
+# Grafana with datasource + dashboard provisioning baked in, so it boots fully
+# wired with no bind-mounts. Build context is ./docker.
+FROM grafana/grafana:11.3.1
+COPY grafana/provisioning /etc/grafana/provisioning
+COPY grafana/dashboards /var/lib/grafana/dashboards

@@ -1,0 +1,76 @@
+# One-command observability stack: a controlled upstream, the resolver, and a
+# preconfigured Prometheus + Grafana. Build context is the repo root so the
+# Dockerfiles can see go.mod and ./cmd.
+#
+#   docker compose up --build
+#   # then drive traffic from the host:
+#   ./bin/loadtest -addr 127.0.0.1:8053 -duration 60s -concurrency 50 -hot 20 -phot 0.9
+#   # Grafana: http://localhost:3000   Prometheus: http://localhost:9090
+
+services:
+  stubupstream:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.stubupstream
+    command: ["-listen", ":8054", "-delay", "20ms", "-ttl", "60"]
+    networks: [resolver-net]
+
+  resolver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.resolver
+    command:
+      - "-listen"
+      - ":8053"
+      - "-upstream"
+      - "stubupstream:8054"
+      - "-metrics-addr"
+      - ":9153"
+      - "-workers"
+      - "16"
+      - "-queue"
+      - "256"
+      - "-cache-size"
+      - "10000"
+    ports:
+      - "8053:8053/udp"   # host dig/loadtest can reach the resolver
+      - "9153:9153"       # metrics, also scraped internally by Prometheus
+    depends_on:
+      - stubupstream
+    healthcheck:
+      # scratch image has no shell/curl, so the binary probes its own /metrics
+      test: ["CMD", "/resolver", "-health-check", "-metrics-addr", ":9153"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks: [resolver-net]
+
+  prometheus:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - resolver
+    networks: [resolver-net]
+
+  grafana:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks: [resolver-net]
+
+networks:
+  resolver-net:
+    driver: bridge
