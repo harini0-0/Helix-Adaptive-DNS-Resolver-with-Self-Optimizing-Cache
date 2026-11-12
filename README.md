@@ -27,6 +27,47 @@ policy.
 Still to build (Stage 8b): predictive prefetching (the 4th config), and an
 LFU baseline to isolate the model's value over plain frequency.
 
+## Run it yourself
+
+Everything runs locally — no cloud account, no hosted services. Clone and go.
+
+**Prerequisites**
+- Go 1.25+ (builds the resolver, cache, worker pool, load client)
+- Docker + Docker Compose (only for the Prometheus + Grafana dashboard stack)
+- Python 3.11+ (only for the optional XGBoost training step)
+
+**1. Build and test the core (Go only)**
+```sh
+make build        # resolver, stub upstream, load client
+make test         # unit tests under the race detector (-race), must be clean
+```
+
+**2. See the live observability dashboard (Docker)**
+```sh
+docker compose up --build        # resolver + stub upstream + Prometheus + Grafana
+# in another terminal, drive traffic so the panels move:
+./bin/loadtest -addr 127.0.0.1:8053 -duration 60s -concurrency 50 -hot 20 -phot 0.9
+# open Grafana at http://localhost:3000  (Prometheus at http://localhost:9090)
+docker compose down              # stop everything when done
+```
+
+**3. Reproduce the cache-on vs cache-off benchmark (Go only)**
+```sh
+# full steps in BENCHMARKS.md; produces the ~9.8x throughput / ~53x latency result
+```
+
+**4. Train the model and run the adaptive-vs-LRU benchmark (Go + Python)**
+```sh
+make venv              # one-time: create .venv, install xgboost/sklearn/numpy
+make telemetry         # generate a labeled training dataset under load
+make train             # train + evaluate + export ml/model/model.json (parity-tested in Go)
+make bench-adaptive    # no-cache / LRU / adaptive on the recency-hostile workload
+```
+
+A recruiter can stop after step 1 or 2 and still see a complete, running system;
+steps 3–4 reproduce the numbers in the docs. The repository is the deliverable —
+no deployment required.
+
 ## Observability stack
 
 `docker compose up --build` brings up four services, all preconfigured:
