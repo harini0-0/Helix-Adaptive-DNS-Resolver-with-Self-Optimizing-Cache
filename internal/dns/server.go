@@ -11,19 +11,21 @@ import (
 
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/cache"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/metrics"
+	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/telemetry"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/workerpool"
 )
 
 // Server is a forwarding DNS resolver backed by a bounded worker pool and a
 // TTL-aware LRU cache.
 type Server struct {
-	Addr      string        // e.g. ":8053"
-	Upstream  string        // e.g. "1.1.1.1:53"
-	Timeout   time.Duration // per-query upstream timeout
-	Workers   int           // number of concurrent query handlers
-	QueueSize int           // pending-query buffer before Submit blocks
-	Cache     *cache.Cache  // shared across all workers
-	NoCache   bool          // when true, bypass the cache entirely (benchmark A/B)
+	Addr      string              // e.g. ":8053"
+	Upstream  string              // e.g. "1.1.1.1:53"
+	Timeout   time.Duration       // per-query upstream timeout
+	Workers   int                 // number of concurrent query handlers
+	QueueSize int                 // pending-query buffer before Submit blocks
+	Cache     *cache.Cache        // shared across all workers
+	NoCache   bool                // when true, bypass the cache entirely (benchmark A/B)
+	Telemetry *telemetry.Recorder // optional; nil disables feature logging
 }
 
 // cacheKey identifies a cacheable question. DNS names are case-insensitive,
@@ -91,6 +93,9 @@ func (s *Server) handle(conn *net.UDPConn, client *net.UDPAddr, packet []byte) {
 	if !s.NoCache {
 		if cached, remaining, ok := s.Cache.Get(key); ok {
 			metrics.CacheHits.Inc()
+			if s.Telemetry != nil {
+				s.Telemetry.Record(key, true)
+			}
 			resp := PatchTTLs(cached, remaining)
 			binary.BigEndian.PutUint16(resp[0:2], query.Header.ID)
 			if _, err := conn.WriteToUDP(resp, client); err != nil {
@@ -100,6 +105,9 @@ func (s *Server) handle(conn *net.UDPConn, client *net.UDPAddr, packet []byte) {
 			return
 		}
 		metrics.CacheMisses.Inc()
+		if s.Telemetry != nil {
+			s.Telemetry.Record(key, false)
+		}
 		log.Printf("cache miss id=%d %s %s from %s", query.Header.ID, q.Name, TypeName(q.Type), client)
 	}
 
