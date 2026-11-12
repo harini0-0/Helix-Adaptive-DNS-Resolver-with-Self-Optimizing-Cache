@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/cache"
+	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/metrics"
 	"github.com/harini0-0/Adaptive-DNS-Resolver-with-Self-Optimizing-Cache/internal/workerpool"
 )
 
@@ -22,6 +23,7 @@ type Server struct {
 	Workers   int           // number of concurrent query handlers
 	QueueSize int           // pending-query buffer before Submit blocks
 	Cache     *cache.Cache  // shared across all workers
+	NoCache   bool          // when true, bypass the cache entirely (benchmark A/B)
 }
 
 // cacheKey identifies a cacheable question. DNS names are case-insensitive,
@@ -66,6 +68,15 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) handle(conn *net.UDPConn, client *net.UDPAddr, packet []byte) {
+	metrics.QueriesTotal.Inc()
+	metrics.InFlightRequests.Inc()
+	defer metrics.InFlightRequests.Dec()
+
+	start := time.Now()
+	defer func() {
+		metrics.ResolveDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	query, err := ParseQuery(packet)
 	if err != nil {
 		log.Printf("malformed query from %s: %v", client, err)
@@ -77,25 +88,31 @@ func (s *Server) handle(conn *net.UDPConn, client *net.UDPAddr, packet []byte) {
 	q := query.Questions[0]
 	key := cacheKey(q)
 
-	if cached, remaining, ok := s.Cache.Get(key); ok {
-		resp := PatchTTLs(cached, remaining)
-		binary.BigEndian.PutUint16(resp[0:2], query.Header.ID)
-		if _, err := conn.WriteToUDP(resp, client); err != nil {
-			log.Printf("write to client error: %v", err)
+	if !s.NoCache {
+		if cached, remaining, ok := s.Cache.Get(key); ok {
+			metrics.CacheHits.Inc()
+			resp := PatchTTLs(cached, remaining)
+			binary.BigEndian.PutUint16(resp[0:2], query.Header.ID)
+			if _, err := conn.WriteToUDP(resp, client); err != nil {
+				log.Printf("write to client error: %v", err)
+			}
+			log.Printf("cache hit id=%d %s %s from %s", query.Header.ID, q.Name, TypeName(q.Type), client)
+			return
 		}
-		log.Printf("cache hit id=%d %s %s from %s", query.Header.ID, q.Name, TypeName(q.Type), client)
-		return
+		metrics.CacheMisses.Inc()
+		log.Printf("cache miss id=%d %s %s from %s", query.Header.ID, q.Name, TypeName(q.Type), client)
 	}
-
-	log.Printf("cache miss id=%d %s %s from %s", query.Header.ID, q.Name, TypeName(q.Type), client)
 
 	resp, err := s.forward(packet)
 	if err != nil {
 		log.Printf("upstream error: %v", err)
 		return
 	}
-	if ttl, ok := ExtractTTL(resp); ok && ttl > 0 {
-		s.Cache.Put(key, resp, ttl)
+	if !s.NoCache {
+		if ttl, ok := ExtractTTL(resp); ok && ttl > 0 {
+			s.Cache.Put(key, resp, ttl)
+			metrics.CacheSize.Set(float64(s.Cache.Len()))
+		}
 	}
 	if _, err := conn.WriteToUDP(resp, client); err != nil {
 		log.Printf("write to client error: %v", err)
